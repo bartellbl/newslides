@@ -1,0 +1,94 @@
+Practical Machine Learning Course Project
+========================================================
+#### Brandon Bartell
+
+## Data Analysis
+First, we downloaded the data, read it into R and converted it to a data frame.
+```{r, cache=TRUE}
+library(caret)
+trainURL <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+training<-read.csv(file=trainURL)
+testURL <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+testing<-read.csv(file=testURL)
+#summary(testing)
+training<-data.frame(training)
+testing<-data.frame(testing)
+```
+
+Looking at a summary of the training data only, we see that there are `r dim(training)[1]` observations and `r dim(training)[2]` features, however many of these features have `r sum(is.na(training$var_yaw_forearm))` NA values. Since this is a sizable fraction of all observations, we elect not to use these features as predictors for our model.
+
+```{r cache=TRUE}
+badind<-which(colSums(is.na(training))==sum(is.na(training$var_yaw_forearm)))
+training<-training[-badind]
+testing<-testing[-badind]
+```
+
+For ease of manipulation, we convert all predictors to numeric and calculate the absolute value of the correlation with the outcome classe to see which variables are most influential.
+
+```{r cache=TRUE}
+t4<-data.frame(sapply(training,as.numeric))
+corclasse<-function(x) cor(x,t4$classe)
+predcor<-apply(t4,2,corclasse)
+plot(abs(predcor))
+abline(0.05,0)
+abs(predcor[order(abs(predcor), decreasing = TRUE)][1:30])
+t5<-t4[,-1]
+```
+
+Immediately we see that the classe outcome is perfectly correlated with itself. We also see that the X predictor is nearly perfectly correlated with classe, since it appears that the different observations were entered one class at a time. Thus, despite its correlation, X will not be a good predictor because it is an artifact of the way the data is ordered, not an intrinsic property of the measurements taken.
+
+We can split our training data into the training and cross validation set
+```{r cache=TRUE}
+set.seed(395)
+t5$classe<-training$classe
+inTrain<-createDataPartition(y=t5$classe,p=0.7,list=FALSE)
+train<-t5[inTrain,]
+cv<-t5[-inTrain,]
+```
+
+Next, we calculate the 2 most important principal components using the `r dim(train)[2]-1` prediction features to do some exploratory plots and see if they can explain the outcome classe.
+
+```{r cache=TRUE}
+preProc1<-preProcess(train[,-length(train)],method="pca",pcaComp=2)
+pc<-predict(preProc1,train[,-length(train)])
+plot(pc[,1],pc[,2],col=train[,length(train)])
+```
+
+It looks like these two principal components do not, by themselves, effectively separate the classes.
+
+Instead, lets use the 25 features whose absolute correlation with the classe outcome was greater than 0.05 and use these as our predictors henceforward.
+
+```{r cache=TRUE}
+pc<-predcor[order(abs(predcor),decreasing=TRUE)][c(1,3:27)]
+feat<-names(pc)
+```
+
+### Random Forest
+
+We can build a random forest using our training data set. Lets see how well the algorithm performs by creating and averaging 20 trees.
+
+```{r cache=TRUE}
+library(randomForest)
+train$classe<-as.factor(train$classe)
+ntrain<-train[feat]
+cv$classe<-as.factor(cv$classe)
+ncv<-cv[feat]
+mf2<-randomForest(classe~.,data=ntrain,ntree=20)
+pred<-predict(mf2,ncv)
+tbl<-table(pred,ncv$classe)
+tbl
+```
+
+The table shows that we correctly classified 5812 of 5885 observations in the cross-validation set for an out of sample error rate of 1.3%. The true classe is the column header and our algorithm's prediction is the row header.
+
+Applying this model to the test set, we get the following predictions
+```{r cache=TRUE}
+set.seed(395)
+ntest<-data.frame(sapply(testing,as.numeric))
+ntest<-ntest[feat[-1]]
+ntest$classe<-testing$classe
+predtest<-predict(mf2,ntest)
+predtest
+```
+
+The first attempt to submit our predictions for the test set yielded 18/20 correct for an out of sample error rate of 10%.
